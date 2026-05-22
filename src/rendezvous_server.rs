@@ -81,8 +81,9 @@ async fn bertdesk_refresh_licenses(api: &str) {
                 Ok(ids) => {
                     let n = ids.len();
                     *LICENSED_IDS.lock().await = ids.into_iter().collect();
-                    LICENSE_ENABLED.store(true, Ordering::SeqCst);
-                    log::info!("BertDesk: {} device con licenza caricati", n);
+                    // sicurezza: applica il blocco solo se c'è almeno una licenza
+                    LICENSE_ENABLED.store(n > 0, Ordering::SeqCst);
+                    log::info!("BertDesk: {} device con licenza caricati (enforce={})", n, n > 0);
                 }
                 Err(e) => log::warn!("BertDesk: parse licenze fallito: {}", e),
             },
