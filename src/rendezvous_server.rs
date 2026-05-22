@@ -1113,6 +1113,12 @@ impl RendezvousServer {
                     }
                 }
             }
+            Some("online" | "ol") => {
+                use std::fmt::Write as _;
+                for id in self.pm.online_ids().await {
+                    let _ = writeln!(res, "{}", id);
+                }
+            }
             Some("always-use-relay" | "aur") => {
                 if let Some(rs) = fds.next() {
                     if rs.to_uppercase() == "Y" {

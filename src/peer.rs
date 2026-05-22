@@ -89,6 +89,18 @@ impl PeerMap {
         Ok(pm)
     }
 
+    // BertDesk: id dei peer attualmente online (heartbeat negli ultimi 30s)
+    pub(crate) async fn online_ids(&self) -> Vec<String> {
+        let m = self.map.read().await;
+        let mut v = Vec::new();
+        for (id, lp) in m.iter() {
+            if lp.read().await.last_reg_time.elapsed().as_millis() < 30_000 {
+                v.push(id.clone());
+            }
+        }
+        v
+    }
+
     #[inline]
     pub(crate) async fn update_pk(
         &mut self,
