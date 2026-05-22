@@ -69,6 +69,29 @@ struct PunchReqEntry { tm: Instant, from_ip: String, to_ip: String, to_id: Strin
 static PUNCH_REQS: Lazy<TokioMutex<Vec<PunchReqEntry>>> = Lazy::new(|| TokioMutex::new(Vec::new()));
 const PUNCH_REQ_DEDUPE_SEC: u64 = 60;
 
+// BertDesk: device id con licenza valida (aggiornati periodicamente dal CRM)
+static LICENSED_IDS: Lazy<TokioMutex<std::collections::HashSet<String>>> =
+    Lazy::new(|| TokioMutex::new(std::collections::HashSet::new()));
+static LICENSE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+async fn bertdesk_refresh_licenses(api: &str) {
+    match reqwest::get(api).await {
+        Ok(resp) => match resp.text().await {
+            Ok(text) => match serde_json::from_str::<Vec<String>>(&text) {
+                Ok(ids) => {
+                    let n = ids.len();
+                    *LICENSED_IDS.lock().await = ids.into_iter().collect();
+                    LICENSE_ENABLED.store(true, Ordering::SeqCst);
+                    log::info!("BertDesk: {} device con licenza caricati", n);
+                }
+                Err(e) => log::warn!("BertDesk: parse licenze fallito: {}", e),
+            },
+            Err(e) => log::warn!("BertDesk: lettura licenze fallita: {}", e),
+        },
+        Err(e) => log::warn!("BertDesk: fetch licenze fallito: {}", e),
+    }
+}
+
 #[derive(Clone)]
 struct Inner {
     serial: i32,
@@ -166,6 +189,17 @@ impl RendezvousServer {
                 "N"
             }
         );
+        if let Ok(api) = std::env::var("BERTDESK_LICENSE_API") {
+            if !api.is_empty() {
+                log::info!("BertDesk: controllo licenze attivo");
+                tokio::spawn(async move {
+                    loop {
+                        bertdesk_refresh_licenses(&api).await;
+                        tokio::time::sleep(Duration::from_secs(120)).await;
+                    }
+                });
+            }
+        }
         if test_addr.to_lowercase() != "no" {
             let test_addr = if test_addr.is_empty() {
                 listener.local_addr()?
@@ -716,6 +750,19 @@ impl RendezvousServer {
                 return Ok((msg_out, None));
             }
             
+            // BertDesk: blocca i device senza licenza valida
+            if LICENSE_ENABLED.load(Ordering::SeqCst)
+                && !LICENSED_IDS.lock().await.contains(&id)
+            {
+                log::warn!("BertDesk: device {} senza licenza valida, connessione rifiutata", id);
+                let mut msg_out = RendezvousMessage::new();
+                msg_out.set_punch_hole_response(PunchHoleResponse {
+                    failure: punch_hole_response::Failure::LICENSE_MISMATCH.into(),
+                    ..Default::default()
+                });
+                return Ok((msg_out, None));
+            }
+
             // record punch hole request (from addr -> peer id/peer_addr)
             {
                 let from_ip = try_into_v4(addr).ip().to_string();
